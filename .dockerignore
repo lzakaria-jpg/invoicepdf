@@ -1,0 +1,8 @@
+output/
+__pycache__/
+*.pyc
+uploads/
+.DS_Store
+.git/
+New folder (5)/
+*.xlsx

@@ -79,6 +79,27 @@
     </div>
 
     <div class="main">
+        <!-- Step 0: Upload (for hosted/remote use) -->
+        <div class="card">
+            <div class="card-head">
+                <h2>
+                    <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17,8 12,3 7,8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                    0. رفع ملفات (PDF أو صور) من المتصفح
+                </h2>
+            </div>
+            <div class="card-body">
+                <div class="input-group">
+                    <input type="file" id="fileInput" multiple
+                           accept=".pdf,.png,.jpg,.jpeg,.tiff,.tif,.bmp,.webp" style="display:none">
+                    <button class="btn btn-green" onclick="document.getElementById('fileInput').click()">اختر الملفات..</button>
+                    <button class="btn btn-blue" id="btnUpload" disabled onclick="uploadFiles()">رفع وتجهيز للمعالجة</button>
+                    <button class="btn btn-gray" onclick="clearUploads()">مسح الملفات المرفوعة</button>
+                    <span id="uploadStatus" style="font-size:13px;color:#94a3b8"></span>
+                </div>
+                <div class="file-list" id="uploadList" style="display:none"></div>
+            </div>
+        </div>
+
         <!-- Step 1: Folder Selection -->
         <div class="card">
             <div class="card-head">
@@ -119,8 +140,8 @@
                     <div>
                         <label style="font-size:13px;color:#94a3b8;display:block;margin-bottom:6px">عدد العمليات المتوازية</label>
                         <select id="workers">
-                            <option value="2">2 عملية</option>
-                            <option value="4" selected>4 عمليات</option>
+                            <option value="2" selected>2 عملية</option>
+                            <option value="4">4 عمليات</option>
                             <option value="8">8 عمليات</option>
                             <option value="12">12 عملية</option>
                             <option value="16">16 عملية</option>
@@ -203,6 +224,55 @@
         let scannedFiles = [];
         let pollTimer = null;
         let currentOutput = null;
+
+        const fileInput = document.getElementById('fileInput');
+        fileInput.addEventListener('change', () => {
+            document.getElementById('btnUpload').disabled = fileInput.files.length === 0;
+            const n = fileInput.files.length;
+            const s = document.getElementById('uploadStatus');
+            if (n) { s.textContent = `${n} ملف محدد`; s.style.color = '#22c55e'; }
+            else { s.textContent = ''; }
+        });
+
+        async function uploadFiles() {
+            const files = fileInput.files;
+            if (!files.length) { toast('اختر الملفات أولاً', 'err'); return; }
+            const fd = new FormData();
+            for (let i = 0; i < files.length; i++) fd.append('files', files[i]);
+            document.getElementById('btnUpload').disabled = true;
+            document.getElementById('uploadStatus').textContent = 'جاري الرفع...';
+            try {
+                const r = await fetch(`${API}/api/upload`, {method:'POST', body: fd});
+                const d = await r.json();
+                if (d.error) { toast(d.error, 'err'); document.getElementById('btnUpload').disabled = false; return; }
+                const s = document.getElementById('uploadStatus');
+                s.textContent = `تم رفع ${d.count} ملف (${d.total_size_mb} MB)`; s.style.color = '#22c55e';
+                const list = document.getElementById('uploadList');
+                list.style.display = 'block';
+                list.innerHTML = d.names.map(n => `<div class="file-item"><span class="name">${n}</span></div>`).join('');
+                document.getElementById('folderPath').value = 'UPLOADS';
+                await scanFolder();
+                toast(`تم رفع ${d.count} ملف - جاهز للمعالجة`, 'ok');
+            } catch (e) {
+                toast('فشل الرفع - تأكد من حجم الملفات', 'err');
+                document.getElementById('btnUpload').disabled = false;
+            }
+        }
+
+        async function clearUploads() {
+            try {
+                await fetch(`${API}/api/clear-uploads`, {method:'POST'});
+                document.getElementById('uploadList').style.display = 'none';
+                document.getElementById('uploadStatus').textContent = '';
+                fileInput.value = '';
+                document.getElementById('btnUpload').disabled = true;
+                document.getElementById('folderPath').value = '';
+                document.getElementById('scanResult').classList.remove('show');
+                document.getElementById('fileList').style.display = 'none';
+                document.getElementById('btnStart').disabled = true;
+                toast('تم مسح الملفات المرفوعة', 'info');
+            } catch {}
+        }
 
         async function checkConn() {
             try {

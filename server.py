@@ -27,6 +27,10 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 OUTPUT_DIR = os.path.join(BASE_DIR, "output")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
+UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+app.config["MAX_CONTENT_LENGTH"] = 4 * 1024 ** 3
+
 sys.path.insert(0, BASE_DIR)
 import smart_extract as se
 
@@ -48,13 +52,10 @@ def index():
     return send_from_directory(BASE_DIR, "index.html")
 
 
-@app.route("/api/scan-folder", methods=["POST"])
-def scan_folder():
-    data = request.get_json()
-    folder = data.get("folder", "").strip()
-    if not folder or not os.path.isdir(folder):
-        return jsonify({"error": "المجلد غير موجود: " + folder}), 400
+UPLOAD_TOKEN = "UPLOADS"
 
+
+def _scan_dir(folder):
     extensions = {'.pdf', '.png', '.jpg', '.jpeg', '.tiff', '.tif', '.bmp', '.webp'}
     files = []
     for root, dirs, fnames in os.walk(folder):
@@ -64,6 +65,59 @@ def scan_folder():
                 fp = os.path.join(root, f)
                 files.append({"path": fp, "name": f, "size": os.path.getsize(fp), "ext": ext})
     files.sort(key=lambda x: x["name"])
+    return files
+
+
+@app.route("/api/upload", methods=["POST"])
+def upload_files():
+    uploaded = request.files.getlist("files")
+    if not uploaded:
+        return jsonify({"error": "لا توجد ملفات مرفوعة"}), 400
+    saved = []
+    total = 0
+    existing = set(os.listdir(UPLOAD_DIR))
+    for f in uploaded:
+        name = os.path.basename(f.filename or "")
+        if not name:
+            continue
+        ext = os.path.splitext(name)[1].lower()
+        if ext not in {'.pdf', '.png', '.jpg', '.jpeg', '.tiff', '.tif', '.bmp', '.webp'}:
+            continue
+        base, e = os.path.splitext(name)
+        n, tries = name, 1
+        while n in existing:
+            n = "%s_%d%s" % (base, tries, e)
+            tries += 1
+        dest = os.path.join(UPLOAD_DIR, n)
+        f.save(dest)
+        existing.add(n)
+        total += os.path.getsize(dest)
+        saved.append(n)
+    return jsonify({"count": len(saved), "names": saved, "total_size_mb": round(total / (1024 * 1024), 1)})
+
+
+@app.route("/api/clear-uploads", methods=["POST"])
+def clear_uploads():
+    removed = 0
+    for f in os.listdir(UPLOAD_DIR):
+        try:
+            os.remove(os.path.join(UPLOAD_DIR, f))
+            removed += 1
+        except Exception:
+            pass
+    return jsonify({"removed": removed})
+
+
+@app.route("/api/scan-folder", methods=["POST"])
+def scan_folder():
+    data = request.get_json()
+    folder = data.get("folder", "").strip()
+    if folder == UPLOAD_TOKEN:
+        files = _scan_dir(UPLOAD_DIR)
+    else:
+        if not folder or not os.path.isdir(folder):
+            return jsonify({"error": "المجلد غير موجود: " + folder}), 400
+        files = _scan_dir(folder)
     total_size = sum(f["size"] for f in files)
     return jsonify({"files": files, "count": len(files), "total_size_mb": round(total_size / (1024 * 1024), 1)})
 
@@ -78,17 +132,20 @@ def start_processing():
     workers = data.get("workers", 4)
     lang = data.get("lang", "ara+eng")
 
-    if not folder or not os.path.isdir(folder):
-        return jsonify({"error": "المجلد غير موجود"}), 400
-
-    extensions = {'.pdf', '.png', '.jpg', '.jpeg', '.tiff', '.tif', '.bmp', '.webp'}
-    files = []
-    for root, dirs, fnames in os.walk(folder):
-        for f in fnames:
-            ext = os.path.splitext(f)[1].lower()
-            if ext in extensions:
-                files.append(os.path.join(root, f))
-    files.sort()
+    if folder == UPLOAD_TOKEN:
+        files = [os.path.join(UPLOAD_DIR, f) for f in sorted(os.listdir(UPLOAD_DIR))
+                 if os.path.splitext(f)[1].lower() in {'.pdf', '.png', '.jpg', '.jpeg', '.tiff', '.tif', '.bmp', '.webp'}]
+    else:
+        if not folder or not os.path.isdir(folder):
+            return jsonify({"error": "المجلد غير موجود"}), 400
+        extensions = {'.pdf', '.png', '.jpg', '.jpeg', '.tiff', '.tif', '.bmp', '.webp'}
+        files = []
+        for root, dirs, fnames in os.walk(folder):
+            for f in fnames:
+                ext = os.path.splitext(f)[1].lower()
+                if ext in extensions:
+                    files.append(os.path.join(root, f))
+        files.sort()
 
     if not files:
         return jsonify({"error": "لا توجد ملفات"}), 400
@@ -941,4 +998,4 @@ if __name__ == "__main__":
     print("  أداة استخراج فواتير PDF و الصور إلى Excel")
     print("  http://localhost:5000")
     print("=" * 60)
-    app.run(debug=False, host="0.0.0.0", port=5000, threaded=True)
+    app.run(debug=False, host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), threaded=True)
